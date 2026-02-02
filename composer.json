@@ -1,5 +1,5 @@
 {
-    "name": "leo/lottery",
+    "name": "afubao/lottery",
     "description": "A lottery module package for ThinkPHP 8",
     "type": "library",
     "keywords": [
