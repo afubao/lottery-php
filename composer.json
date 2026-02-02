@@ -11,8 +11,7 @@
     "license": "MIT",
     "authors": [
         {
-            "name": "Leo",
-            "email": ""
+            "name": "Leo"
         }
     ],
     "require": {
