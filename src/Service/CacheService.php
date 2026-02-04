@@ -48,10 +48,19 @@ class CacheService
             $rulesToClear = $ruleIds;
         }
         
-        // 清除指定规则的 Redis Hash
+        // 收集需要清除发放统计缓存的奖品ID
+        $prizeIdsToClear = [];
+        
+        // 清除指定规则的 Redis Hash，并收集奖品ID
         foreach ($rulesToClear as $id) {
             $ruleDetailKey = $this->keyBuilder->ruleDetail($id);
             try {
+                // 在删除前，先获取规则信息中的 prize_id
+                $ruleInfo = $this->redis->hgetall($ruleDetailKey);
+                if (!empty($ruleInfo) && isset($ruleInfo['prize_id'])) {
+                    $prizeIdsToClear[] = (int)$ruleInfo['prize_id'];
+                }
+                
                 // 删除 Redis Hash
                 $this->redis->eval("return redis.call('del', KEYS[1])", 1, $ruleDetailKey);
             } catch (\Exception $e) {
@@ -59,7 +68,16 @@ class CacheService
             }
         }
         
+        // 清除这些规则关联奖品的发放统计缓存
+        // 注意：同一个奖品可能被多个规则使用，所以需要去重
+        $prizeIdsToClear = array_unique($prizeIdsToClear);
+        foreach ($prizeIdsToClear as $prizeId) {
+            $this->clearDistributionCache($prizeId);
+        }
+        
         // 注意：如果未指定规则ID，只清除缓存键，Redis Hash 会在下次查询时自动重建
+        // 此时无法获取奖品ID，所以不会清除发放统计缓存
+        // 建议：如果需要清除所有缓存，请使用 clearAllCache()
     }
 
     /**
@@ -72,12 +90,55 @@ class CacheService
     }
 
     /**
+     * 清除奖品发放数量统计缓存（用于峰值小时策略）
+     * @param int|null $prizeId 奖品ID，如果为null则清除当天所有奖品的发放统计缓存
+     * @param string|null $date 日期格式：ymd，如 250201，null 表示今天
+     */
+    public function clearDistributionCache(?int $prizeId = null, ?string $date = null): void
+    {
+        $date = $date ?? date('ymd');
+        
+        if ($prizeId !== null) {
+            // 清除指定奖品的发放统计缓存
+            $distributionKey = $this->keyBuilder->prizeDistribution($prizeId, $date);
+            $this->cache->delete($distributionKey);
+        } else {
+            // 清除当天所有奖品的发放统计缓存
+            // 由于 CacheInterface 不提供模式匹配功能，这里使用 Redis 的 SCAN 命令
+            // 注意：这要求底层缓存驱动是 Redis
+            try {
+                $pattern = $this->keyBuilder->getPrefixKey() . 'distribution:*:' . $date;
+                // 使用 Lua 脚本通过 SCAN 命令查找并删除匹配的键（避免 KEYS 命令阻塞）
+                $luaScript = "
+                    local cursor = '0'
+                    local deleted = 0
+                    repeat
+                        local result = redis.call('SCAN', cursor, 'MATCH', ARGV[1], 'COUNT', 100)
+                        cursor = result[1]
+                        local keys = result[2]
+                        if #keys > 0 then
+                            deleted = deleted + redis.call('DEL', unpack(keys))
+                        end
+                    until cursor == '0'
+                    return deleted
+                ";
+                $this->redis->eval($luaScript, 0, $pattern);
+            } catch (\Exception $e) {
+                // 如果 SCAN 失败（可能是非 Redis 驱动或集群模式），尝试直接通过缓存接口删除
+                // 由于无法获取所有奖品ID，这里只能清除已知的缓存键
+                // 建议：如果需要清除所有 distribution 缓存，请指定具体的 prizeId 或使用数据库查询所有奖品ID
+            }
+        }
+    }
+
+    /**
      * 清除所有抽奖相关缓存
      */
     public function clearAllCache(): void
     {
         $this->clearRuleCache();
         $this->clearPrizeCache();
+        $this->clearDistributionCache(); // 清除发放数量统计缓存
     }
 
     /**
