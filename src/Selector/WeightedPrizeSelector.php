@@ -12,10 +12,21 @@ use Exception;
  */
 class WeightedPrizeSelector implements PrizeSelectorInterface
 {
+    private int $noPrizeWeight;
+
+    /**
+     * 构造函数
+     * @param int $noPrizeWeight 不中奖权重，0表示不启用
+     */
+    public function __construct(int $noPrizeWeight = 0)
+    {
+        $this->noPrizeWeight = $noPrizeWeight;
+    }
+
     /**
      * 从规则列表中选择一个奖品规则
      * @param array $rules 奖品规则列表
-     * @return PrizeRule|null
+     * @return PrizeRule|null 选中的规则，如果返回null则表示不中奖（会触发兜底逻辑）
      */
     public function select(array $rules): ?PrizeRule
     {
@@ -39,7 +50,18 @@ class WeightedPrizeSelector implements PrizeSelectorInterface
         }
         
         $weightSum = array_sum($weightList);
-        $maxRand = max($maxRand, $weightSum);
+        
+        // 如果启用了不中奖权重，将其加入总权重
+        $totalWeight = $weightSum;
+        if ($this->noPrizeWeight > 0) {
+            $noPrizeWeightAdjusted = $this->noPrizeWeight;
+            if ($maxFactor > 1) {
+                $noPrizeWeightAdjusted = $this->noPrizeWeight * $maxFactor;
+            }
+            $totalWeight += $noPrizeWeightAdjusted;
+        }
+        
+        $maxRand = max($maxRand, $totalWeight);
         
         // 生成随机数
         try {
@@ -57,6 +79,11 @@ class WeightedPrizeSelector implements PrizeSelectorInterface
                 $prizeRuleId = $key;
                 break;
             }
+        }
+        
+        // 如果随机数落在"不中奖"区间（在规则权重之后），返回 null
+        if ($prizeRuleId == 0 && $this->noPrizeWeight > 0 && $rand > $weightSum) {
+            return null; // 不中奖，触发兜底逻辑
         }
         
         if ($prizeRuleId == 0) {

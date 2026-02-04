@@ -71,7 +71,10 @@ class LotteryServiceProvider extends Service
         });
         
         // 注册 PrizeSelector
-        $this->app->bind(PrizeSelectorInterface::class, WeightedPrizeSelector::class);
+        $noPrizeWeight = $config['no_prize_weight'] ?? 0;
+        $this->app->bind(PrizeSelectorInterface::class, function () use ($noPrizeWeight) {
+            return new WeightedPrizeSelector($noPrizeWeight);
+        });
         
         // 注册 StockManager
         $this->app->bind(StockManagerInterface::class, function () use ($prefixKey) {
